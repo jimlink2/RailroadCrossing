@@ -2,8 +2,8 @@
 
 Servo gate;
 
-const int GATE_DOWN = 20;
-const int GATE_UP   = 90;
+const int GATE_DOWN = 25;
+const int GATE_UP   = 105;
 
 const int LEFT_LED  = 4;
 const int RIGHT_LED = 5;
