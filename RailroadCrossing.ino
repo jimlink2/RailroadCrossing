@@ -1,130 +1,301 @@
 #include <Servo.h>
 
-Servo gate;
+const int SENSOR_A_PIN = 2;
+const int SENSOR_B_PIN = 3;
+
+const int LEFT_LED_PIN  = 4;
+const int RIGHT_LED_PIN = 5;
+
+const int SERVO_PIN = 9;
 
 const int GATE_DOWN = 25;
 const int GATE_UP   = 100;
 
-const int LEFT_LED  = 4;
-const int RIGHT_LED = 5;
+const unsigned long CLEAR_DELAY  = 300;
+const unsigned long WARNING_TIME = 1500;
+const unsigned long REARM_DELAY  = 1000;
 
-// Adjust this to taste:
-// 20 = fast
-// 50 = moderate
-// 75 = slow
-const unsigned long SERVO_MOVE_INTERVAL = 50;
+// Flash timing
+const unsigned long FLASH_INTERVAL = 350;
+
+// Servo timing
+const unsigned long SERVO_INTERVAL = 40;
+
+Servo gateServo;
 
 enum State
 {
   IDLE,
+  WARNING,
   LOWERING,
-  OCCUPIED,
-  RAISING
+  A_TO_B_WAIT_FOR_B,
+  A_TO_B_EXITING,
+  B_TO_A_WAIT_FOR_A,
+  B_TO_A_EXITING,
+  RAISING,
+  REARM
 };
 
 State state = IDLE;
 
-unsigned long stateStartTime = 0;
-unsigned long lastFlashTime = 0;
-unsigned long lastServoTime = 0;
+int gatePosition = GATE_UP;
 
-bool leftLampOn = true;
-int gatePos = GATE_UP;
+unsigned long clearTimer = 0;
+unsigned long flashTimer = 0;
+unsigned long servoTimer = 0;
+unsigned long warningStartTime = 0;
+unsigned long rearmStartTime = 0;
 
-void setup()
+bool flashSide = false;
+bool directionAToB = true;
+
+//--------------------------------------------------
+
+void startFlashing()
 {
-  pinMode(LEFT_LED, OUTPUT);
-  pinMode(RIGHT_LED, OUTPUT);
+  flashTimer = millis();
+  flashSide = false;
 
-  gate.attach(9);
-  gate.write(GATE_UP);
+  digitalWrite(LEFT_LED_PIN, HIGH);
+  digitalWrite(RIGHT_LED_PIN, LOW);
+}
 
-  stateStartTime = millis();
+void stopFlashing()
+{
+  digitalWrite(LEFT_LED_PIN, LOW);
+  digitalWrite(RIGHT_LED_PIN, LOW);
 }
 
 void updateFlashers()
 {
-  if (state == IDLE)
+  if (state == IDLE || state == REARM)
   {
-    digitalWrite(LEFT_LED, LOW);
-    digitalWrite(RIGHT_LED, LOW);
+    digitalWrite(LEFT_LED_PIN, LOW);
+    digitalWrite(RIGHT_LED_PIN, LOW);
     return;
   }
 
-  if (millis() - lastFlashTime >= 250)
+  if (millis() - flashTimer >= FLASH_INTERVAL)
   {
-    lastFlashTime = millis();
+    flashTimer = millis();
 
-    leftLampOn = !leftLampOn;
+    flashSide = !flashSide;
 
-    digitalWrite(LEFT_LED, leftLampOn);
-    digitalWrite(RIGHT_LED, !leftLampOn);
+    digitalWrite(LEFT_LED_PIN, flashSide);
+    digitalWrite(RIGHT_LED_PIN, !flashSide);
   }
 }
 
+//--------------------------------------------------
+
+bool moveGateToward(int target)
+{
+  if (millis() - servoTimer < SERVO_INTERVAL)
+    return false;
+
+  servoTimer = millis();
+
+  if (gatePosition < target)
+  {
+    gatePosition++;
+    gateServo.write(gatePosition);
+  }
+  else if (gatePosition > target)
+  {
+    gatePosition--;
+    gateServo.write(gatePosition);
+  }
+
+  return (gatePosition == target);
+}
+
+//--------------------------------------------------
+
+void setup()
+{
+  Serial.begin(115200);
+
+  pinMode(SENSOR_A_PIN, INPUT_PULLUP);
+  pinMode(SENSOR_B_PIN, INPUT_PULLUP);
+
+  pinMode(LEFT_LED_PIN, OUTPUT);
+  pinMode(RIGHT_LED_PIN, OUTPUT);
+
+  gateServo.attach(SERVO_PIN);
+
+  gatePosition = GATE_UP;
+  gateServo.write(gatePosition);
+
+  Serial.println("Railroad Crossing Controller");
+}
+
+//--------------------------------------------------
+
 void loop()
 {
+  bool sensorA = (digitalRead(SENSOR_A_PIN) == LOW);
+  bool sensorB = (digitalRead(SENSOR_B_PIN) == LOW);
+
   updateFlashers();
 
   switch (state)
   {
     case IDLE:
 
-      // Simulate train approaching every 5 seconds
-      if (millis() - stateStartTime > 5000)
+      if (sensorA)
       {
+        Serial.println("Train entered from A");
+
+        directionAToB = true;
+
+        startFlashing();
+
+        warningStartTime = millis();
+
+        state = WARNING;
+      }
+      else if (sensorB)
+      {
+        Serial.println("Train entered from B");
+
+        directionAToB = false;
+
+        startFlashing();
+
+        warningStartTime = millis();
+
+        state = WARNING;
+      }
+
+      break;
+
+    case WARNING:
+
+      if (millis() - warningStartTime >= WARNING_TIME)
+      {
+        Serial.println("Lowering Gate");
+
         state = LOWERING;
-        stateStartTime = millis();
       }
 
       break;
 
     case LOWERING:
 
-      if (millis() - lastServoTime >= SERVO_MOVE_INTERVAL)
+      if (moveGateToward(GATE_DOWN))
       {
-        lastServoTime = millis();
-
-        if (gatePos > GATE_DOWN)
+        if (directionAToB)
         {
-          gatePos--;
-          gate.write(gatePos);
+          Serial.println("Gate Down, waiting for B");
+          state = A_TO_B_WAIT_FOR_B;
         }
         else
         {
-          state = OCCUPIED;
-          stateStartTime = millis();
+          Serial.println("Gate Down, waiting for A");
+          state = B_TO_A_WAIT_FOR_A;
         }
       }
 
       break;
 
-    case OCCUPIED:
+    case A_TO_B_WAIT_FOR_B:
 
-      // Fake train occupies crossing for 10 seconds
-      if (millis() - stateStartTime > 10000)
+      if (sensorB)
       {
-        state = RAISING;
+        Serial.println("Train reached B");
+
+        clearTimer = 0;
+        state = A_TO_B_EXITING;
+      }
+
+      break;
+
+    case A_TO_B_EXITING:
+
+      if (!sensorB)
+      {
+        if (clearTimer == 0)
+          clearTimer = millis();
+
+        if (millis() - clearTimer >= CLEAR_DELAY)
+        {
+          Serial.println("Train cleared B");
+          state = RAISING;
+        }
+      }
+      else
+      {
+        clearTimer = 0;
+      }
+
+      break;
+
+    case B_TO_A_WAIT_FOR_A:
+
+      if (sensorA)
+      {
+        Serial.println("Train reached A");
+
+        clearTimer = 0;
+        state = B_TO_A_EXITING;
+      }
+
+      break;
+
+    case B_TO_A_EXITING:
+
+      if (!sensorA)
+      {
+        if (clearTimer == 0)
+          clearTimer = millis();
+
+        if (millis() - clearTimer >= CLEAR_DELAY)
+        {
+          Serial.println("Train cleared A");
+          state = RAISING;
+        }
+      }
+      else
+      {
+        clearTimer = 0;
       }
 
       break;
 
     case RAISING:
 
-      if (millis() - lastServoTime >= SERVO_MOVE_INTERVAL)
+      if (moveGateToward(GATE_UP))
       {
-        lastServoTime = millis();
+        stopFlashing();
 
-        if (gatePos < GATE_UP)
+        Serial.println("Gate Up");
+
+        rearmStartTime = 0;
+
+        state = REARM;
+      }
+
+      break;
+
+    case REARM:
+
+      digitalWrite(LEFT_LED_PIN, LOW);
+      digitalWrite(RIGHT_LED_PIN, LOW);
+
+      if (!sensorA && !sensorB)
+      {
+        if (rearmStartTime == 0)
+          rearmStartTime = millis();
+
+        if (millis() - rearmStartTime >= REARM_DELAY)
         {
-          gatePos++;
-          gate.write(gatePos);
-        }
-        else
-        {
+          Serial.println("Crossing idle");
           state = IDLE;
-          stateStartTime = millis();
         }
+      }
+      else
+      {
+        rearmStartTime = 0;
       }
 
       break;
