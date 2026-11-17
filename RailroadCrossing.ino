@@ -12,14 +12,14 @@ const int GATE_DOWN = 25;
 const int GATE_UP   = 100;
 
 const unsigned long CLEAR_DELAY  = 300;
-const unsigned long WARNING_TIME = 1500;
+const unsigned long WARNING_TIME = 100;
 const unsigned long REARM_DELAY  = 1000;
 
 // Flash timing
 const unsigned long FLASH_INTERVAL = 350;
 
 // Servo timing
-const unsigned long SERVO_INTERVAL = 40;
+const unsigned long SERVO_INTERVAL = 20;
 
 Servo gateServo;
 
