@@ -171,10 +171,16 @@ void loop()
 
     case WARNING:
 
-      if (millis() - warningStartTime >= WARNING_TIME)
+      if (!sensorA && !sensorB)
+      {
+        Serial.println("Train left before gate lowered");
+
+        stopFlashing();
+        state = IDLE;
+      }
+      else if (millis() - warningStartTime >= WARNING_TIME)
       {
         Serial.println("Lowering Gate");
-
         state = LOWERING;
       }
 
